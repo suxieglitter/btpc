@@ -18,6 +18,7 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from scipy import signal
 from torch.utils.data import Dataset
 
 from .anchor_utils import (
@@ -100,14 +101,16 @@ def load_data_ridge(data_path: str, resize: int, shift: int, snr_min: float, snr
         record_ids = group["record_id"][:]
 
     snrs = np.asarray(snrs).reshape(-1)
-    mask = (snrs >= snr_min) & (snrs <= snr_max)
+    mask = (snrs >= snr_min) & (snrs < snr_max)
     valid_idx = np.where(mask)[0]
     if limit and valid_idx.size > limit:
         valid_idx = valid_idx[:limit]
 
-    waveforms = waveforms[valid_idx]
+    waveforms = np.asarray(waveforms[valid_idx], dtype=np.float32)
     snrs = snrs[valid_idx]
     record_ids = record_ids[valid_idx]
+
+    waveforms = signal.detrend(waveforms, axis=1).astype(np.float32, copy=False)
 
     sampling_rate = 100.0
     p_arrival = int(10 * sampling_rate)
@@ -587,7 +590,9 @@ def main_predict(args):
         tta_max_shift=args.tta_max_shift,
         batch_size=batch_size,
         tta_scale_jitter=args.tta_scale_jitter,
-        tta_noise_std=args.tta_noise_std,
+        tta_noise_std=(
+            args.tta_noise_std if args.anchor_tta_noise_std is None else args.anchor_tta_noise_std
+        ),
     )
     mapping, cluster_stats = fit_anchor_cluster_mapping(
         cluster_labels=anchor_metrics["modal_class"],
@@ -812,6 +817,12 @@ def build_argparser():
     parser.add_argument("--tta-max-shift", type=int, default=2)
     parser.add_argument("--tta-scale-jitter", type=float, default=0.02)
     parser.add_argument("--tta-noise-std", type=float, default=0.005)
+    parser.add_argument(
+        "--anchor-tta-noise-std",
+        type=float,
+        default=None,
+        help="Separate TTA noise std for the anchor mapping pass (default: same as --tta-noise-std).",
+    )
     parser.add_argument("--predict-vote-threshold", type=float, default=0.8)
     parser.add_argument("--predict-margin-threshold", type=float, default=0.15)
     return parser

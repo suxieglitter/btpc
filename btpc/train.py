@@ -40,6 +40,7 @@ from .data import (
     SeismicPolarityDataset,
     build_eval_dataloader,
     build_train_dataloader,
+    load_ridgecrest_unlabeled_dataset,
     load_scsn_polarity_dataset,
     weak_eval_augment_waveforms,
 )
@@ -81,6 +82,7 @@ CODE_TO_STATUS = {value: key for key, value in STATUS_TO_CODE.items()}
 # Only ``data_path`` has no default: data never ships with the package.
 STAGE1_DEFAULTS = {
     "data_path": None,
+    "dataset_source": "scsn",
     "waveform_key": DEFAULT_WAVEFORM_KEY,
     "label_key": DEFAULT_LABEL_KEY,
     "snr_key": DEFAULT_SNR_KEY,
@@ -108,6 +110,7 @@ STAGE1_DEFAULTS = {
     "stage1_cluster_method": "spectral",
     "warmup_epochs": 20,
     "filter_interval": 10,
+    "eval_interval": 5,
     "n_tta_views": 30,
     "tta_max_shift": 2,
     "knn_k": 10,
@@ -199,6 +202,7 @@ def stage1_runtime_config(cfg: Dict, data_path: str) -> Dict:
     """Config dict saved as stage1_config.json (keys match released checkpoints)."""
     return {
         "train_data_path": data_path,
+        "dataset_source": str(cfg["dataset_source"]),
         "data_waveform_key": cfg["waveform_key"],
         "data_label_key": cfg["label_key"],
         "data_snr_key": cfg["snr_key"],
@@ -253,21 +257,26 @@ def stage1_data_path_from_config(stage1_config: Dict) -> str:
 
 def dataset_from_stage1_config(stage1_config: Dict) -> SeismicPolarityDataset:
     """Rebuild the Stage 1 training dataset from a saved stage1_config.json."""
-    return load_scsn_polarity_dataset(
+    common_kwargs = dict(
         data_path=stage1_data_path_from_config(stage1_config),
         snr_range=stage1_config["snr_range"],
         n_select=stage1_config["num_used"],
         resize=stage1_config["resize"],
         shift=stage1_config["shift"],
-        bino=stage1_config["bino"],
         aug_shift=stage1_config["aug_shift"],
         aug_noise_std_range=stage1_config["aug_noise_std_range"],
         aug_scale_range=stage1_config["aug_scale_range"],
         norm_mod=stage1_config["norm_mod"],
+    )
+    if str(stage1_config.get("dataset_source", "scsn")) == "ridgecrest_unlabeled":
+        return load_ridgecrest_unlabeled_dataset(**common_kwargs)
+    return load_scsn_polarity_dataset(
+        bino=stage1_config["bino"],
         waveform_key=stage1_config.get("data_waveform_key", DEFAULT_WAVEFORM_KEY),
         label_key=stage1_config.get("data_label_key", DEFAULT_LABEL_KEY),
         snr_key=stage1_config.get("data_snr_key", DEFAULT_SNR_KEY),
         selection_seed=get_data_selection_seed(stage1_config),
+        **common_kwargs,
     )
 
 
@@ -1103,7 +1112,7 @@ def train_barlow_twins(model, dataset, optimizer, scheduler, args, save_dir):
         on_diag_losses.append(epoch_on_diag_loss / max(n_total, 1))
         off_diag_losses.append(epoch_off_diag_loss / max(n_total, 1) * args.lambda_param)
 
-        if epoch_one_based % 5 == 0:
+        if args.eval_interval and epoch_one_based % int(args.eval_interval) == 0:
             features, _, polarities, _ = extract_info(
                 model,
                 eval_loader,
@@ -1116,10 +1125,13 @@ def train_barlow_twins(model, dataset, optimizer, scheduler, args, save_dir):
                     acc_dir[method].append(acc(polarities, cluster_labels)[0])
                 except Exception:
                     acc_dir[method].append(np.nan)
+            eval_epochs = [
+                (i + 1) * int(args.eval_interval or 5) for i in range(len(acc_dir[list(acc_dir)[0]]))
+            ]
             for idx in range(2):
                 plt.figure(figsize=(10, 6))
                 for method in acc_dir:
-                    plt.plot(np.arange(len(acc_dir[method]) * 5, step=5), acc_dir[method], label=method)
+                    plt.plot(eval_epochs, acc_dir[method], label=method)
                 if idx == 0:
                     plt.ylim(0.85, 0.99)
                 plt.xlabel("Epoch")
@@ -1196,12 +1208,19 @@ def export_cluster_results(
     cluster_labels = np.asarray(cluster_labels, dtype=np.int64)
     true_labels = np.asarray(dataset.polarities[sample_indices], dtype=np.int64)
     snrs = np.asarray(dataset.snrs[sample_indices], dtype=float)
-    acc_value, _, _, mapped_preds = acc(true_labels, cluster_labels)
-    binary_mask = true_labels != 2
-    if np.any(binary_mask):
-        acc_value_excluding_label2 = acc(true_labels[binary_mask], cluster_labels[binary_mask])[0]
+    has_true_labels = bool(np.any(np.isin(true_labels, (0, 1, 2))))
+    if has_true_labels:
+        acc_value, _, _, mapped_preds = acc(true_labels, cluster_labels)
+        binary_mask = true_labels != 2
+        if np.any(binary_mask):
+            acc_value_excluding_label2 = acc(true_labels[binary_mask], cluster_labels[binary_mask])[0]
+        else:
+            acc_value_excluding_label2 = np.nan
     else:
+        acc_value = np.nan
         acc_value_excluding_label2 = np.nan
+        binary_mask = np.zeros(len(true_labels), dtype=bool)
+        mapped_preds = np.full(len(cluster_labels), -1, dtype=np.int64)
 
     score = np.nan
     if len(np.unique(cluster_labels)) > 1 and len(cluster_labels) > 1:
@@ -1229,7 +1248,7 @@ def export_cluster_results(
             int(true_labels[local_idx]),
             int(cluster_labels[local_idx]),
             int(mapped_preds[local_idx]),
-            int(mapped_preds[local_idx] == true_labels[local_idx]),
+            int(mapped_preds[local_idx] == true_labels[local_idx]) if has_true_labels else -1,
         ]
         if status_lookup is not None:
             row.append(str(status_lookup[int(sample_index)]))
@@ -1254,45 +1273,46 @@ def export_cluster_results(
         ver="pca",
         filename="clustering_visualization_pca.png",
     )
-    visualize_clusters_compare(
-        emb_tsne,
-        preds=mapped_preds,
-        true_labels=true_labels,
-        acc_value=acc_value,
-        acc_value_excluding_label2=acc_value_excluding_label2,
-        score=score,
-        out_dir=save_dir,
-        ver="tsne",
-        filename="clustering_visualization_tsne_true_compare.png",
-    )
-    visualize_clusters_compare(
-        emb_pca,
-        preds=mapped_preds,
-        true_labels=true_labels,
-        acc_value=acc_value,
-        acc_value_excluding_label2=acc_value_excluding_label2,
-        score=score,
-        out_dir=save_dir,
-        ver="pca",
-        filename="clustering_visualization_pca_true_compare.png",
-    )
-    save_confusion_matrix_percent(
-        true_labels=true_labels,
-        pred_labels=np.where(mapped_preds >= 0, mapped_preds, 2),
-        class_labels=[0, 1, 2],
-        out_dir=save_dir,
-        filename_prefix="confusion_matrix_percent_all012",
-        title="Confusion Matrix (%) | Labels 0/1/2",
-    )
-    if np.any(binary_mask):
-        save_confusion_matrix_percent(
-            true_labels=true_labels[binary_mask],
-            pred_labels=mapped_preds[binary_mask],
-            class_labels=[0, 1],
+    if has_true_labels:
+        visualize_clusters_compare(
+            emb_tsne,
+            preds=mapped_preds,
+            true_labels=true_labels,
+            acc_value=acc_value,
+            acc_value_excluding_label2=acc_value_excluding_label2,
+            score=score,
             out_dir=save_dir,
-            filename_prefix="confusion_matrix_percent_binary01",
-            title="Confusion Matrix (%) | Labels 0/1 only",
+            ver="tsne",
+            filename="clustering_visualization_tsne_true_compare.png",
         )
+        visualize_clusters_compare(
+            emb_pca,
+            preds=mapped_preds,
+            true_labels=true_labels,
+            acc_value=acc_value,
+            acc_value_excluding_label2=acc_value_excluding_label2,
+            score=score,
+            out_dir=save_dir,
+            ver="pca",
+            filename="clustering_visualization_pca_true_compare.png",
+        )
+        save_confusion_matrix_percent(
+            true_labels=true_labels,
+            pred_labels=np.where(mapped_preds >= 0, mapped_preds, 2),
+            class_labels=[0, 1, 2],
+            out_dir=save_dir,
+            filename_prefix="confusion_matrix_percent_all012",
+            title="Confusion Matrix (%) | Labels 0/1/2",
+        )
+        if np.any(binary_mask):
+            save_confusion_matrix_percent(
+                true_labels=true_labels[binary_mask],
+                pred_labels=mapped_preds[binary_mask],
+                class_labels=[0, 1],
+                out_dir=save_dir,
+                filename_prefix="confusion_matrix_percent_binary01",
+                title="Confusion Matrix (%) | Labels 0/1 only",
+            )
 
     rng = np.random.default_rng(42)
     for cluster_id in np.unique(cluster_labels):
@@ -1723,22 +1743,28 @@ def main_stage1(args):
     torch.manual_seed(cfg["seed"])
     np.random.seed(cfg["seed"])
 
-    dataset = load_scsn_polarity_dataset(
+    loader_kwargs = dict(
         data_path=data_path,
         snr_range=cfg["snr_range"],
         n_select=cfg["num_used"],
         resize=cfg["resize"],
         shift=cfg["shift"],
-        bino=cfg["bino"],
         aug_shift=cfg["aug_shift"],
         aug_noise_std_range=cfg["aug_noise_std_range"],
         aug_scale_range=cfg["aug_scale_range"],
         norm_mod=cfg["norm_mod"],
-        waveform_key=cfg["waveform_key"],
-        label_key=cfg["label_key"],
-        snr_key=cfg["snr_key"],
-        selection_seed=cfg["data_selection_seed"],
     )
+    if cfg["dataset_source"] == "ridgecrest_unlabeled":
+        dataset = load_ridgecrest_unlabeled_dataset(**loader_kwargs)
+    else:
+        dataset = load_scsn_polarity_dataset(
+            bino=cfg["bino"],
+            waveform_key=cfg["waveform_key"],
+            label_key=cfg["label_key"],
+            snr_key=cfg["snr_key"],
+            selection_seed=cfg["data_selection_seed"],
+            **loader_kwargs,
+        )
 
     model = build_barlow_model(
         base_channels=cfg["base_cha"], projector_dims=cfg["projector_dims"]
@@ -1787,6 +1813,16 @@ def build_stage1_parser(subparsers):
     parser.add_argument("--config", default=None, help="YAML config file; CLI flags override it.")
     parser.add_argument("--save-path", default=None, help="Output directory (default: auto-named).")
     parser.add_argument("--data-path", default=None)
+    parser.add_argument(
+        "--dataset-source",
+        default=None,
+        choices=["scsn", "ridgecrest_unlabeled"],
+        help=(
+            "scsn: labelled SCSN-style HDF5 (X/Y/snr keys); ridgecrest_unlabeled: "
+            "unlabelled Ridgecrest phasenet group, trained without labels (implies "
+            "no bino filtering)."
+        ),
+    )
     parser.add_argument("--waveform-key", default=None)
     parser.add_argument("--label-key", default=None)
     parser.add_argument("--snr-key", default=None)
@@ -1818,6 +1854,12 @@ def build_stage1_parser(subparsers):
     )
     parser.add_argument("--warmup-epochs", type=int, default=None)
     parser.add_argument("--filter-interval", type=int, default=None)
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=None,
+        help="Run the diagnostic clustering-accuracy eval every N epochs; 0 disables it.",
+    )
     parser.add_argument("--n-tta-views", type=int, default=None)
     parser.add_argument("--tta-max-shift", type=int, default=None)
     parser.add_argument("--knn-k", type=int, default=None)

@@ -96,6 +96,23 @@ btpc-predict --stage2-checkpoint runs/0518_42/stage2/stage2_cluster_classifier.p
     --anchor-bank-path anchor_bank_scsn_50_1000.npz
 ```
 
+### Training on unlabeled Ridgecrest waveforms
+
+The paper's Ridgecrest application self-trains on the unlabelled `phasenet`
+group of the Ridgecrest consensus file (P arrival at sample index 1000), then
+predicts the same rows and feeds the accepted polarities to SKHASH:
+
+```bash
+btpc-train stage1 --data-path /path/to/consensus_waveforms_bp1_20.h5 \
+    --dataset-source ridgecrest_unlabeled --no-bino --num-used 0 \
+    --epochs 120 --n-tta-views 4 --eval-interval 0 --save-path runs/ridge/stage1
+btpc-train stage2 --stage1-dir runs/ridge/stage1
+btpc-predict --stage2-checkpoint runs/ridge/stage2/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path /path/to/consensus_waveforms_bp1_20.h5 \
+    --anchor-bank-path anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 --anchor-tta-noise-std 0
+```
+
 ## Reference hyperparameters
 
 Stage 1 defaults (also in `configs/btpc_0518.yaml`):

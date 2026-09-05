@@ -1,9 +1,12 @@
-"""Datasets, waveform preprocessing and augmentation, and SCSN HDF5 loading.
+"""Datasets, waveform preprocessing and augmentation, and HDF5 loading.
 
-The SCSN polarity files are HDF5 with three parallel datasets:
-``X`` (waveforms, ``(n, 600)`` float), ``Y`` (labels, 0=up / 1=down /
-2=uncertain) and ``snr`` (signal-to-noise ratios). The P arrival is assumed
-to sit at sample index 300 with a 100 Hz sampling rate.
+Two source layouts are supported. The SCSN polarity files are HDF5 with three
+parallel datasets: ``X`` (waveforms, ``(n, 600)`` float), ``Y`` (labels,
+0=up / 1=down / 2=uncertain) and ``snr``. The P arrival sits at sample index
+300 with a 100 Hz sampling rate. The unlabeled Ridgecrest files carry a
+``phasenet`` group with ``waveforms`` / ``snr`` / ``record_id`` and a P
+arrival at sample index 1000; they are used for self-supervised training
+without labels.
 """
 
 import os
@@ -21,6 +24,7 @@ DEFAULT_WAVEFORM_KEY = "X"
 DEFAULT_LABEL_KEY = "Y"
 DEFAULT_SNR_KEY = "snr"
 DEFAULT_P_ARRIVAL_INDEX = 300
+RIDGECREST_P_ARRIVAL_INDEX = 1000
 DEFAULT_SAMPLING_RATE = 100.0
 
 
@@ -341,6 +345,72 @@ def load_scsn_polarity_dataset(
     )
     print(f"Data path: {data_path}")
     print(f"Dataset keys: waveform={waveform_key}, label={label_key}, snr={snr_key}")
+    print("Dataset size:", len(dataset))
+    return dataset
+
+
+def load_ridgecrest_unlabeled_dataset(
+    data_path,
+    snr_range,
+    n_select,
+    resize=32,
+    shift=0,
+    aug_shift=1,
+    aug_noise_std_range=(0.05, 0.2),
+    aug_scale_range=(0.8, 1.2),
+    norm_mod="max",
+) -> SeismicPolarityDataset:
+    """Load the unlabeled Ridgecrest ``phasenet`` waveforms for self-supervised
+    training.
+
+    The HDF5 file must contain a ``phasenet`` group with ``waveforms``,
+    ``snr`` and ``record_id`` datasets. Rows are kept in SNR-range order (no
+    label filtering is applied; polarities are set to -1). The P arrival sits
+    at sample index 1000 (10 s at 100 Hz).
+    """
+    data_path = resolve_data_path(data_path)
+    if not os.path.isfile(data_path):
+        raise FileNotFoundError(
+            f"Data file not found: {data_path}. "
+            "Pass --data-path pointing to the Ridgecrest consensus HDF5 file."
+        )
+
+    low, high = snr_range
+    with h5py.File(data_path, "r") as handle:
+        if "phasenet" not in handle or "waveforms" not in handle["phasenet"]:
+            available_keys = ", ".join(sorted(handle.keys()))
+            raise KeyError(
+                f"Missing 'phasenet/waveforms' group in {data_path}. "
+                f"Available top-level keys: {available_keys}"
+            )
+        group = handle["phasenet"]
+        snr_all = np.asarray(group["snr"][:]).reshape(-1)
+        sel = np.where((snr_all >= float(low)) & (snr_all < float(high)))[0]
+        if sel.size == 0:
+            raise ValueError(f"No Ridgecrest samples in snr range [{low}, {high}).")
+        sel = np.sort(sel)
+        n_select = int(n_select) if n_select and n_select > 0 else None
+        if n_select is not None and sel.size > n_select:
+            sel = sel[:n_select]
+        waveforms = np.asarray(group["waveforms"][sel], dtype=np.float32)
+        snr_sel = snr_all[sel]
+
+    dataset = SeismicPolarityDataset(
+        waveforms=waveforms,
+        polarities=np.full(len(waveforms), -1, dtype=np.int64),
+        snrs=snr_sel,
+        p_arrival_times=np.full(len(waveforms), RIDGECREST_P_ARRIVAL_INDEX, dtype=np.int64),
+        sampling_rate=DEFAULT_SAMPLING_RATE,
+        shift=shift,
+        p_window=resize / DEFAULT_SAMPLING_RATE,
+        apply_augmentation=True,
+        aug_shift=aug_shift,
+        aug_noise_std_range=aug_noise_std_range,
+        aug_scale_range=aug_scale_range,
+        norm_mod=norm_mod,
+    )
+    print(f"Data path: {data_path}")
+    print("Dataset source: Ridgecrest unlabeled (phasenet group, no labels)")
     print("Dataset size:", len(dataset))
     return dataset
 
