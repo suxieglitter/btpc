@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.ipynb_checkpoints/
+.mimosa/
+
+# run outputs and data never belong in the repository
+runs/
+*.hdf5
+*.h5
+*.npz
+*.pth

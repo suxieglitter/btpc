@@ -1,0 +1,52 @@
+# BTPC reference configuration — reproduces the paper model
+# (mdl_d20260518 run "1_0.05-0.2_0.8-1.2_0.005_0-1000_10000_32_0_True_16_512_256_0.001_80_encoder_max_clean_42",
+# values from its stage1_config.json).
+#
+# `data_path` currently points at a local copy of the refined SCSN consensus
+# dataset; see docs/data.md for the dataset description and download status.
+# Every value below can be overridden on the command line, e.g.
+#   btpc-train stage1 --config configs/btpc_0518.yaml --epochs 40
+
+data_path: /home/glitter/software/a_dl_cluster/data/scsn_consensus_fm_CFM_EQ_proportion_binary_snr_100k_goodmin5_realnoise_combined.hdf5
+waveform_key: X
+label_key: Y
+snr_key: snr
+snr_min: 0.0
+snr_max: 1000.0
+num_used: 10000
+resize: 32
+shift: 0
+bino: true
+base_cha: 16
+projector_dims: 512
+batch_size: 256
+lr: 0.001
+lambda_param: 0.005
+epochs: 80
+cluster_feature: encoder
+norm_mod: max
+eval_source: clean
+aug_shift: 1
+aug_noise_min: 0.05
+aug_noise_max: 0.2
+aug_scale_min: 0.8
+aug_scale_max: 1.2
+enable_periodic_filtering: true
+stage1_cluster_method: spectral
+warmup_epochs: 20
+filter_interval: 10
+n_tta_views: 30
+tta_max_shift: 2
+knn_k: 10
+low_score_threshold: 0.45
+high_score_threshold: 0.7
+low_score_patience: 2
+w_q: 0.15
+w_aug: 0.2
+w_knn: 0.2
+w_stab: 0.25
+w_margin: 0.2
+downweight_loss_scale: 0.35
+stability_ema_alpha: 0.5
+seed: 42
+data_selection_seed: 42
