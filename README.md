@@ -66,7 +66,10 @@ matrices, clustering visualizations and filtering timelines.
 ## Training the paper model
 
 With the real dataset in place (see [docs/data.md](docs/data.md)), the
-reference configuration reproduces the paper model:
+reference configuration reproduces the paper model. A full from-scratch
+reproduction of the paper results (SCSN models, the confusion-matrix figure,
+Ridgecrest predictions and the Kagan-angle comparison) is documented in
+[docs/reproduction.md](docs/reproduction.md).
 
 ```bash
 btpc-train stage1 --config configs/btpc_0518.yaml --save-path runs/0518_42/stage1

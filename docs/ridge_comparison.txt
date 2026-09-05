@@ -1,0 +1,17 @@
+reference rows: 27698 | reproduced rows: 27698 | joined: 27698
+
+pred_cluster_class agreement (mapping-independent): 0.9734
+pred_polarity agreement as-written: 0.9734
+pred_polarity agreement with flipped mapping: 0.0266
+
+TTA metric differences (reference vs reproduced):
+metric                mean|diff|   max|diff|   pearson r
+--------------------------------------------------------
+vote_consistency         0.01350     0.50000      0.4960
+mean_confidence          0.01690     0.46077      0.7700
+mean_margin              0.03380     0.92154      0.7700
+mean_center_margin       0.01149     0.06229      0.9715
+
+reject set @ mc<0.8 & mcm<0.05: reference 1461 | reproduced 1334 | overlap 741 | Jaccard 0.3608
+up/down counts: reference [15473 12225] vs reproduced [16097 11601]
+stored final_label (reference reject rule) agreement: 0.9562
