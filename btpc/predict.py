@@ -139,19 +139,33 @@ def _stage1_data_settings(stage1_config: Dict, train_data_path_override: Optiona
     }
 
 
-def get_stage1_training_source_indices(
+def get_stage1_selection_pools(
     stage1_config: Dict, train_data_path_override: Optional[str] = None
-) -> np.ndarray:
-    """Reproduce the exact sample selection used during Stage 1 training."""
-    data_settings = _stage1_data_settings(stage1_config, train_data_path_override)
+):
+    """Reproduce the Stage 1 sample selection from its saved config.
+
+    Returns ``(training_source_indices, candidate_pool)`` where the candidate
+    pool is the pre-filter seeded 2x draw (empty bino filtering not applied).
+    """
+    data_path = train_data_path_override or stage1_config.get(
+        "train_data_path", stage1_config.get("data_path")
+    )
+    if not data_path:
+        raise ValueError(
+            "stage1_config.json does not record a training data path; "
+            "pass train_data_path_override explicitly."
+        )
+    data_path = resolve_data_path(data_path)
+    label_key = stage1_config.get("data_label_key", DEFAULT_LABEL_KEY)
+    snr_key = stage1_config.get("data_snr_key", DEFAULT_SNR_KEY)
     low, high = stage1_config.get("snr_range", [0.0, 1000.0])
     n_select = int(stage1_config.get("num_used", 10000))
     selection_seed = get_data_selection_seed(stage1_config)
     bino = bool(stage1_config.get("bino", True))
 
-    with h5py.File(data_settings["data_path"], "r") as handle:
-        snr_all = np.asarray(handle[data_settings["snr_key"]][:]).reshape(-1)
-        labels_all = np.asarray(handle[data_settings["label_key"]][:]).reshape(-1)
+    with h5py.File(data_path, "r") as handle:
+        snr_all = np.asarray(handle[snr_key][:]).reshape(-1)
+        labels_all = np.asarray(handle[label_key][:]).reshape(-1)
 
     eligible = np.where((snr_all >= float(low)) & (snr_all < float(high)))[0]
     if eligible.size == 0:
@@ -165,10 +179,11 @@ def get_stage1_training_source_indices(
             )
         rng = np.random.default_rng(selection_seed)
         candidate_count = min(eligible.size, n_select * 2)
-        selected = rng.choice(eligible, size=candidate_count, replace=False)
+        candidate_pool = rng.choice(eligible, size=candidate_count, replace=False)
     else:
-        selected = eligible
+        candidate_pool = eligible
 
+    selected = candidate_pool
     if bino:
         selected = selected[labels_all[selected] != 2]
 
@@ -180,7 +195,15 @@ def get_stage1_training_source_indices(
             )
         selected = selected[:n_select]
 
-    return np.asarray(selected, dtype=np.int64)
+    return np.asarray(selected, dtype=np.int64), np.asarray(candidate_pool, dtype=np.int64)
+
+
+def get_stage1_training_source_indices(
+    stage1_config: Dict, train_data_path_override: Optional[str] = None
+) -> np.ndarray:
+    """Reproduce the exact sample selection used during Stage 1 training."""
+    selected, _ = get_stage1_selection_pools(stage1_config, train_data_path_override)
+    return selected
 
 
 def load_data_train_unused(
@@ -323,6 +346,8 @@ def compute_prediction_metrics(
     n_tta_views: int,
     tta_max_shift: int,
     batch_size: int,
+    tta_scale_jitter: float = 0.02,
+    tta_noise_std: float = 0.005,
 ):
     repeated_classes = []
     repeated_confidence = []
@@ -338,8 +363,8 @@ def compute_prediction_metrics(
             waves = weak_eval_augment_waveforms(
                 clean_waveforms,
                 max_shift=tta_max_shift,
-                scale_jitter=0.02,
-                noise_std=0.005,
+                scale_jitter=float(tta_scale_jitter),
+                noise_std=float(tta_noise_std),
             )
         logits, raw_embeddings = run_classifier_logits(model, waves, batch_size=batch_size)
         probs = softmax_numpy(logits)
@@ -561,6 +586,8 @@ def main_predict(args):
         n_tta_views=max(args.n_tta_views, 1),
         tta_max_shift=args.tta_max_shift,
         batch_size=batch_size,
+        tta_scale_jitter=args.tta_scale_jitter,
+        tta_noise_std=args.tta_noise_std,
     )
     mapping, cluster_stats = fit_anchor_cluster_mapping(
         cluster_labels=anchor_metrics["modal_class"],
@@ -584,6 +611,8 @@ def main_predict(args):
         n_tta_views=max(args.n_tta_views, 1),
         tta_max_shift=args.tta_max_shift,
         batch_size=batch_size,
+        tta_scale_jitter=args.tta_scale_jitter,
+        tta_noise_std=args.tta_noise_std,
     )
     pred_polarity = apply_cluster_mapping(target_metrics["modal_class"], mapping)
 
@@ -781,6 +810,8 @@ def build_argparser():
     parser.add_argument("--anchor-sample-seed", type=int, default=20260404)
     parser.add_argument("--n-tta-views", type=int, default=4)
     parser.add_argument("--tta-max-shift", type=int, default=2)
+    parser.add_argument("--tta-scale-jitter", type=float, default=0.02)
+    parser.add_argument("--tta-noise-std", type=float, default=0.005)
     parser.add_argument("--predict-vote-threshold", type=float, default=0.8)
     parser.add_argument("--predict-margin-threshold", type=float, default=0.15)
     return parser

@@ -75,7 +75,19 @@ btpc-valid --stage2-checkpoint runs/0518_42/stage2/stage2_cluster_classifier.pth
 ```
 
 Any value in the YAML file can be overridden on the command line, e.g.
-`--epochs 40 --batch-size 128`. Prediction on external event waveforms:
+`--epochs 40 --batch-size 128`. To reproduce the paper's in-sample validation
+numbers exactly, evaluate on the reconstructed Stage 1 training rows with the
+paper's TTA and reject settings (reject only when mean confidence < 0.8 AND
+mean center margin < 0.05), and compare with
+`scripts/compare_paper_valid.py`:
+
+```bash
+btpc-valid --stage2-checkpoint runs/0518_42/stage2/stage2_cluster_classifier.pth \
+    --target-source train --n-tta-views 30 --tta-max-shift 0 --tta-noise-std 0.015 \
+    --reject-rule confidence_center_margin --reject-strategy all
+```
+
+Prediction on external event waveforms:
 
 ```bash
 btpc-predict --stage2-checkpoint runs/0518_42/stage2/stage2_cluster_classifier.pth \

@@ -1,12 +1,14 @@
-"""Validation of Stage 2 polarity predictions on the non-overlapping portion
-of the training source file.
+"""Validation of Stage 2 polarity predictions on rows of the training source
+file.
 
-The validation split is reconstructed from the training HDF5: rows eligible in
-the Stage 1 SNR range are split into the (reproducible) training candidate
-pool and the remaining ``nontrain`` rows. The Stage 2 classifier predicts the
-nontrain rows; cluster IDs are mapped to physical up/down polarities with the
-training split, and unstable predictions (low vote consistency or low margin)
-are rejected (final label 2).
+Two targets are supported. ``--target-source nontrain`` (default) predicts on
+rows of the training HDF5 that Stage 1 did not use; the Stage 1 training rows
+are reconstructed with the same seeded selection as training. ``--target-source
+train`` predicts on the reconstructed Stage 1 training rows themselves
+(in-sample, matching the paper's ``predict_valid`` outputs). Cluster IDs are
+mapped to physical up/down polarities with the labelled training split, and
+unstable predictions are rejected (final label 2) either by TTA vote
+consistency/margin or by mean confidence/center-margin criteria.
 """
 
 import argparse
@@ -29,7 +31,12 @@ from .data import (
     DEFAULT_WAVEFORM_KEY,
     read_scsn_rows,
 )
-from .predict import compute_prediction_metrics, load_stage2_bundle
+from .predict import (
+    compute_prediction_metrics,
+    get_stage1_selection_pools,
+    load_stage2_bundle,
+)
+from .train import get_data_selection_seed
 from .utils import (
     checked_path,
     maybe_mkdir,
@@ -173,7 +180,20 @@ def build_split_from_training_source(
     max_valid_samples: int,
     label_key: str = DEFAULT_LABEL_KEY,
     snr_key: str = DEFAULT_SNR_KEY,
+    selection_seed: int = 42,
+    target_source: str = "nontrain",
 ):
+    selection_config = {
+        "train_data_path": data_path,
+        "data_label_key": label_key,
+        "data_snr_key": snr_key,
+        "snr_range": [snr_min, snr_max],
+        "num_used": num_used,
+        "bino": bino,
+        "data_selection_seed": int(selection_seed),
+    }
+    train_source_indices, candidate_pool = get_stage1_selection_pools(selection_config, None)
+
     with h5py.File(data_path, "r") as handle:
         missing_keys = [key for key in (label_key, snr_key) if key not in handle]
         if missing_keys:
@@ -189,25 +209,17 @@ def build_split_from_training_source(
     if eligible.size == 0:
         raise ValueError(f"No source samples found in SNR range [{snr_min}, {snr_max}).")
 
-    if int(num_used) > 0 and eligible.size > int(num_used):
-        train_candidate_indices = np.sort(eligible[: int(num_used)])
+    train_labels = label_all[train_source_indices]
+
+    if str(target_source).lower() == "train":
+        valid_source_indices = np.asarray(train_source_indices, dtype=np.int64)
+        valid_labels = np.asarray(train_labels, dtype=np.int64)
     else:
-        train_candidate_indices = np.sort(eligible)
-
-    candidate_labels = label_all[train_candidate_indices]
-    if bool(bino):
-        actual_train_mask = candidate_labels != 2
-    else:
-        actual_train_mask = np.ones(train_candidate_indices.shape, dtype=bool)
-
-    train_source_indices = train_candidate_indices[actual_train_mask]
-    train_labels = candidate_labels[actual_train_mask]
-
-    excluded_for_valid = (
-        train_candidate_indices if exclude_initial_selected_pool else train_source_indices
-    )
-    valid_source_indices = np.setdiff1d(eligible, excluded_for_valid, assume_unique=True)
-    valid_labels = label_all[valid_source_indices]
+        excluded_for_valid = (
+            candidate_pool if exclude_initial_selected_pool else train_source_indices
+        )
+        valid_source_indices = np.setdiff1d(eligible, excluded_for_valid, assume_unique=True)
+        valid_labels = label_all[valid_source_indices]
 
     if not include_label2:
         keep_mask = valid_labels != 2
@@ -223,7 +235,7 @@ def build_split_from_training_source(
 
     return {
         "eligible_indices": np.asarray(eligible, dtype=np.int64),
-        "train_candidate_indices": np.asarray(train_candidate_indices, dtype=np.int64),
+        "train_candidate_indices": np.asarray(candidate_pool, dtype=np.int64),
         "train_source_indices": np.asarray(train_source_indices, dtype=np.int64),
         "train_labels": np.asarray(train_labels, dtype=np.int64),
         "valid_source_indices": np.asarray(valid_source_indices, dtype=np.int64),
@@ -580,6 +592,8 @@ def fit_mapping_from_train_split(
     n_tta_views: int,
     tta_max_shift: int,
     batch_size: int,
+    tta_scale_jitter: float = 0.02,
+    tta_noise_std: float = 0.005,
     waveform_key: str = DEFAULT_WAVEFORM_KEY,
     label_key: str = DEFAULT_LABEL_KEY,
     snr_key: str = DEFAULT_SNR_KEY,
@@ -612,6 +626,8 @@ def fit_mapping_from_train_split(
         n_tta_views=max(int(n_tta_views), 1),
         tta_max_shift=int(tta_max_shift),
         batch_size=int(batch_size),
+        tta_scale_jitter=float(tta_scale_jitter),
+        tta_noise_std=float(tta_noise_std),
     )
     mapping, cluster_stats = fit_anchor_cluster_mapping(
         cluster_labels=train_metrics["modal_class"],
@@ -667,7 +683,35 @@ def main_valid(args):
         csv_payload = load_prediction_payload_from_csv(csv_path)
         true_labels_all = np.asarray(csv_payload["true_labels"], dtype=np.int64)
         pred_labels_all = np.asarray(csv_payload["pred_labels"], dtype=np.int64)
-        final_labels_all = np.asarray(csv_payload["final_labels"], dtype=np.int64)
+        metric_arrays = csv_payload["metrics"]
+        required = (
+            ["mean_confidence", "mean_center_margin"]
+            if args.reject_rule == "confidence_center_margin"
+            else ["vote_consistency", "mean_margin"]
+        )
+        if all(key in metric_arrays for key in required):
+            if args.reject_rule == "confidence_center_margin":
+                violation_masks = [
+                    metric_arrays["mean_confidence"] < float(args.valid_confidence_threshold),
+                    metric_arrays["mean_center_margin"] < float(args.valid_center_margin_threshold),
+                ]
+            else:
+                violation_masks = [
+                    metric_arrays["vote_consistency"] < float(args.valid_vote_threshold),
+                    metric_arrays["mean_margin"] < float(args.valid_margin_threshold),
+                ]
+            violation_stack = np.stack(violation_masks, axis=0)
+            if args.reject_strategy == "all":
+                reject_all = np.all(violation_stack, axis=0)
+            else:
+                reject_all = np.any(violation_stack, axis=0)
+            final_labels_all = np.where(reject_all, 2, pred_labels_all).astype(np.int64)
+        else:
+            print(
+                "CSV is missing metric columns for the requested reject rule; "
+                "keeping the stored final labels."
+            )
+            final_labels_all = np.asarray(csv_payload["final_labels"], dtype=np.int64)
         existing_summary = load_json_if_exists(summary_path)
         if existing_summary is None:
             existing_summary = {
@@ -720,6 +764,8 @@ def main_valid(args):
         max_valid_samples=int(args.max_valid_samples),
         label_key=label_key,
         snr_key=snr_key,
+        selection_seed=get_data_selection_seed(stage1_config),
+        target_source=str(args.target_source),
     )
 
     mapping, cluster_stats, mapping_accuracy = fit_mapping_from_train_split(
@@ -731,6 +777,8 @@ def main_valid(args):
         n_tta_views=args.n_tta_views,
         tta_max_shift=args.tta_max_shift,
         batch_size=batch_size,
+        tta_scale_jitter=args.tta_scale_jitter,
+        tta_noise_std=args.tta_noise_std,
         waveform_key=waveform_key,
         label_key=label_key,
         snr_key=snr_key,
@@ -801,12 +849,25 @@ def main_valid(args):
             n_tta_views=max(int(args.n_tta_views), 1),
             tta_max_shift=int(args.tta_max_shift),
             batch_size=batch_size,
+            tta_scale_jitter=args.tta_scale_jitter,
+            tta_noise_std=args.tta_noise_std,
         )
         pred_polarity = apply_cluster_mapping(metrics["modal_class"], mapping)
-        reject_mask = (
-            (metrics["vote_consistency"] < float(args.valid_vote_threshold))
-            | (metrics["mean_margin"] < float(args.valid_margin_threshold))
-        )
+        if args.reject_rule == "confidence_center_margin":
+            violation_masks = [
+                metrics["mean_confidence"] < float(args.valid_confidence_threshold),
+                metrics["mean_center_margin"] < float(args.valid_center_margin_threshold),
+            ]
+        else:
+            violation_masks = [
+                metrics["vote_consistency"] < float(args.valid_vote_threshold),
+                metrics["mean_margin"] < float(args.valid_margin_threshold),
+            ]
+        violation_stack = np.stack(violation_masks, axis=0)
+        if args.reject_strategy == "all":
+            reject_mask = np.all(violation_stack, axis=0)
+        else:
+            reject_mask = np.any(violation_stack, axis=0)
         final_label = pred_polarity.copy()
         final_label[reject_mask] = 2
 
@@ -881,11 +942,15 @@ def main_valid(args):
             "snr_range": [snr_min, snr_max],
             "num_used": num_used,
             "bino": bino,
+            "data_selection_seed": get_data_selection_seed(stage1_config),
+            "selection_mode": "seeded_2x_candidates_filter_then_n",
             "include_label2": bool(args.include_label2),
             "exclude_initial_selected_pool": bool(args.exclude_initial_selected_pool),
+            "target_source": str(args.target_source),
             "note": (
-                "valid split is built from the original training-source file after removing "
-                "the reconstructed Stage1 training rows."
+                "Stage 1 training rows are reconstructed from the training-source file with "
+                "the seeded selection used during training; the valid target is either those "
+                "training rows (train) or the remaining eligible rows (nontrain)."
             ),
         },
         "split_sizes": {
@@ -894,9 +959,19 @@ def main_valid(args):
             "train_actual_count_used_for_mapping": int(len(split_info["train_source_indices"])),
             "valid_count": int(len(valid_indices)),
         },
+        "tta_settings": {
+            "n_tta_views": int(args.n_tta_views),
+            "tta_max_shift": int(args.tta_max_shift),
+            "tta_scale_jitter": float(args.tta_scale_jitter),
+            "tta_noise_std": float(args.tta_noise_std),
+        },
         "thresholds": {
+            "reject_rule": str(args.reject_rule),
+            "reject_strategy": "and" if args.reject_strategy == "all" else "or",
             "valid_vote_threshold": float(args.valid_vote_threshold),
             "valid_margin_threshold": float(args.valid_margin_threshold),
+            "valid_confidence_threshold": float(args.valid_confidence_threshold),
+            "valid_center_margin_threshold": float(args.valid_center_margin_threshold),
         },
         "cluster_mapping": {int(k): int(v) for k, v in mapping.items()},
         "cluster_stats": cluster_stats,
@@ -934,6 +1009,16 @@ def build_argparser():
     parser.add_argument("--max-valid-samples", type=int, default=0)
     parser.add_argument("--include-label2", action="store_true", default=False)
     parser.add_argument(
+        "--target-source",
+        choices=["nontrain", "train"],
+        default="nontrain",
+        help=(
+            "nontrain: rows of the training file not used by Stage 1 (out-of-sample); "
+            "train: the reconstructed Stage 1 training rows (in-sample, matches the "
+            "paper's predict_valid outputs)."
+        ),
+    )
+    parser.add_argument(
         "--exclude-initial-selected-pool",
         action="store_true",
         default=False,
@@ -942,8 +1027,32 @@ def build_argparser():
     parser.add_argument("--chunk-size", type=int, default=8192)
     parser.add_argument("--n-tta-views", type=int, default=4)
     parser.add_argument("--tta-max-shift", type=int, default=2)
+    parser.add_argument("--tta-scale-jitter", type=float, default=0.02)
+    parser.add_argument("--tta-noise-std", type=float, default=0.005)
+    parser.add_argument(
+        "--reject-rule",
+        choices=["vote_margin", "confidence_center_margin"],
+        default="vote_margin",
+        help=(
+            "vote_margin: reject on low TTA vote consistency or low softmax margin; "
+            "confidence_center_margin: reject on low mean confidence or low mean "
+            "center margin (the paper's reject criterion)."
+        ),
+    )
+    parser.add_argument(
+        "--reject-strategy",
+        choices=["any", "all"],
+        default="any",
+        help=(
+            "any: reject when at least one active criterion is violated (original code's "
+            "'or'); all: reject only when every active criterion is violated (original "
+            "code's 'and', used by the paper)."
+        ),
+    )
     parser.add_argument("--valid-vote-threshold", type=float, default=0.8)
     parser.add_argument("--valid-margin-threshold", type=float, default=0.15)
+    parser.add_argument("--valid-confidence-threshold", type=float, default=0.8)
+    parser.add_argument("--valid-center-margin-threshold", type=float, default=0.05)
     parser.add_argument("--force-rerun-predict", action="store_true", default=False)
     return parser
 
