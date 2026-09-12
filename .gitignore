@@ -14,3 +14,6 @@ runs/
 *.h5
 *.npz
 *.pth
+
+# nested revision workspace has its own repo (suxieglitter/SRL_revision)
+SRL_revision/
