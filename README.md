@@ -50,6 +50,14 @@ full dependency list. Two optional dependencies are only needed for specific
 steps: **obspy** for `make_pwave_dataset.py` (reading SAC/mSEED waveforms)
 and **SKHASH** (`pip install skhash`) for the focal-mechanism inversion.
 
+Tip: on Linux a plain `pip install torch` pulls the full CUDA stack
+(2–3 GB of downloads). For CPU-only training use the CPU wheel instead
+(~200 MB):
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
 ## Quick start (no data needed)
 
 `scripts/make_toy_data.py` generates a small synthetic dataset and a matching
