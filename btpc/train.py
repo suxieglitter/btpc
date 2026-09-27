@@ -268,7 +268,7 @@ def dataset_from_stage1_config(stage1_config: Dict) -> SeismicPolarityDataset:
         aug_scale_range=stage1_config["aug_scale_range"],
         norm_mod=stage1_config["norm_mod"],
     )
-    if str(stage1_config.get("dataset_source", "scsn")) == "ridgecrest_unlabeled":
+    if str(stage1_config.get("dataset_source", "scsn")) in ("ridgecrest_unlabeled", "unlabeled"):
         return load_ridgecrest_unlabeled_dataset(**common_kwargs)
     return load_scsn_polarity_dataset(
         bino=stage1_config["bino"],
@@ -1754,7 +1754,7 @@ def main_stage1(args):
         aug_scale_range=cfg["aug_scale_range"],
         norm_mod=cfg["norm_mod"],
     )
-    if cfg["dataset_source"] == "ridgecrest_unlabeled":
+    if cfg["dataset_source"] in ("ridgecrest_unlabeled", "unlabeled"):
         dataset = load_ridgecrest_unlabeled_dataset(**loader_kwargs)
     else:
         dataset = load_scsn_polarity_dataset(
@@ -1816,10 +1816,11 @@ def build_stage1_parser(subparsers):
     parser.add_argument(
         "--dataset-source",
         default=None,
-        choices=["scsn", "ridgecrest_unlabeled"],
+        choices=["scsn", "ridgecrest_unlabeled", "unlabeled"],
         help=(
-            "scsn: labelled SCSN-style HDF5 (X/Y/snr keys); ridgecrest_unlabeled: "
-            "unlabelled Ridgecrest phasenet group, trained without labels (implies "
+            "scsn: labelled SCSN-style HDF5 (X/Y/snr keys); unlabeled "
+            "(or ridgecrest_unlabeled): phasenet-group HDF5 built by "
+            "scripts/make_pwave_dataset.py, trained without labels (implies "
             "no bino filtering)."
         ),
     )

@@ -42,11 +42,75 @@ Used with `btpc-predict --target-source ridge`.
 - Training windows are 32 samples (0.32 s) centered on the P arrival
   (`resize: 32`, `shift: 0` in the config).
 
+## Preparing your own dataset
+
+BTPC is label-free at training time, so you can train on waveforms from your
+own region: cut P-wave windows around already-picked P arrivals with
+`scripts/make_pwave_dataset.py` and train with `--dataset-source unlabeled`.
+
+The script applies the same processing as the paper's Ridgecrest file:
+vertical component (named channel, else HHZ > BHZ > EHZ > any `*Z`), resample
+to 100 Hz, a 1–20 Hz 4th-order Butterworth bandpass, and
+SNR = max|P..P+0.5 s| / max|P−0.5 s..P| computed on the filtered waveform.
+The output places the P arrival at sample index 1000 (10 s after the window
+start). It was checked to reproduce the paper's
+`consensus_waveforms_bp1_20.h5` sample-for-sample.
+
+Two pick sources are supported. A CSV pick table (export one from any picker;
+`waveform_path` and `p_time` are the required columns, `record_id`, `event_id`,
+`station` and `channel` are optional):
+
+```csv
+waveform_path,p_time,record_id,station
+data/2019-07-04/CI.CCA.2019-07-04.mseed,2019-07-04T17:35:13.078,0,CI.CCA
+```
+
+```bash
+python scripts/make_pwave_dataset.py --picks picks.csv --output my_data.h5
+```
+
+Or a directory of SAC files whose P pick lives in a SAC header field
+(`a` by default, `t0`…`t9` also work):
+
+```bash
+python scripts/make_pwave_dataset.py --sac-dir sac/ --sac-pick-field a --output my_data.h5
+```
+
+Window length, sampling rate and filter corners are adjustable
+(`--pre-sec`, `--post-sec`, `--freqmin/--freqmax`, `--no-filter`); keep the
+defaults if you want to stay on the paper's processing. Rows whose noise
+window is flat zero get `snr = nan` and are dropped by the SNR range filter at
+training/prediction time. The script needs obspy (`pip install obspy`), which
+is not a core btpc dependency.
+
+Then train on your region without any labels and predict with the shipped
+SCSN anchor bank:
+
+```bash
+btpc-train stage1 --dataset-source unlabeled --data-path my_data.h5 \
+    --num-used 0 --epochs 120 --n-tta-views 4 --eval-interval 0 \
+    --save-path runs/mine/stage1
+btpc-train stage2 --stage1-dir runs/mine/stage1
+btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 --anchor-tta-noise-std 0
+```
+
+`--dataset-source unlabeled` is an alias of `ridgecrest_unlabeled`: both read
+the `phasenet` group produced by this script.
+
 ## Building the anchor bank
 
 `btpc-predict` needs a small anchor bank of labelled SCSN waveforms to map
-the A/B clusters onto up/down polarities. Build it once from dataset 1
-(any SCSN file with `Y`/`snr` works):
+the A/B clusters onto up/down polarities. The repository ships the bank used
+in the paper — `anchors/anchor_bank_scsn_50_1000.npz` (10,000 labelled SCSN
+waveforms, 5,000 per polarity, SNR 50–1000, plus its CSV manifest; prediction
+subsamples 100 per polarity from it) — so prediction works out of the box;
+the paper's Ridgecrest application used exactly this bank across regions.
+
+To build a bank from your own labelled waveforms instead (any SCSN file with
+`Y`/`snr` works):
 
 ```python
 from btpc.anchor_utils import build_anchor_bank

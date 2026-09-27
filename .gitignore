@@ -8,12 +8,14 @@ venv/
 .ipynb_checkpoints/
 .mimosa/
 
-# run outputs and data never belong in the repository
+# run outputs and data never belong in the repository (the shipped anchor
+# bank in anchors/ is the one exception: prediction needs it and it is small)
 runs/
 *.hdf5
 *.h5
 *.npz
 *.pth
+!anchors/*.npz
 
 # nested revision workspace has its own repo (suxieglitter/SRL_revision)
 SRL_revision/

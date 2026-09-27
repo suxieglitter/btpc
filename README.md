@@ -96,10 +96,33 @@ Prediction on external event waveforms:
 btpc-predict --stage2-checkpoint runs/0518_42/stage2/stage2_cluster_classifier.pth \
     --target-source ridge \
     --data-path /path/to/consensus_waveforms_bp1_20.h5 \
-    --anchor-bank-path anchor_bank_scsn_50_1000.npz
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz
 ```
 
-### Training on unlabeled Ridgecrest waveforms
+### Training on your own (unlabelled) waveforms
+
+Training needs no polarity labels, so BTPC can be retrained per region: cut
+P-wave windows around your own picked P arrivals with
+`scripts/make_pwave_dataset.py` (pick table CSV or SAC directory; see
+[docs/data.md](docs/data.md#preparing-your-own-dataset) for the processing
+details), then self-train and predict with the shipped SCSN anchor bank:
+
+```bash
+python scripts/make_pwave_dataset.py --sac-dir sac/ --sac-pick-field a --output my_data.h5
+btpc-train stage1 --dataset-source unlabeled --data-path my_data.h5 \
+    --num-used 0 --epochs 120 --n-tta-views 4 --eval-interval 0 \
+    --save-path runs/mine/stage1
+btpc-train stage2 --stage1-dir runs/mine/stage1
+btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 --anchor-tta-noise-std 0
+```
+
+`anchors/anchor_bank_scsn_50_1000.npz` ships with the repository; the paper's
+Ridgecrest application used this same SCSN bank across regions.
+
+### Training on the unlabeled Ridgecrest waveforms
 
 The paper's Ridgecrest application self-trains on the unlabelled `phasenet`
 group of the Ridgecrest consensus file (P arrival at sample index 1000), then
@@ -112,7 +135,7 @@ btpc-train stage1 --data-path /path/to/consensus_waveforms_bp1_20.h5 \
 btpc-train stage2 --stage1-dir runs/ridge/stage1
 btpc-predict --stage2-checkpoint runs/ridge/stage2/stage2_cluster_classifier.pth \
     --target-source ridge --data-path /path/to/consensus_waveforms_bp1_20.h5 \
-    --anchor-bank-path anchor_bank_scsn_50_1000.npz \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
     --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 --anchor-tta-noise-std 0
 ```
 
