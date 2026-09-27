@@ -1,3 +1,5 @@
+[English](README.md) | [中文](README_zh-CN.md)
+
 # BTPC — Barlow Twins P-wave polarity classification
 
 BTPC classifies the first-motion polarity of seismic P waves (up vs. down)
