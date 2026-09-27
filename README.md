@@ -199,6 +199,32 @@ an independent catalog, compute Kagan angles with any standard Kagan (2007)
 implementation — that evaluation is outside this package. Full details and
 tunable control-file parameters: `docs/skhash.md`.
 
+## Predicting with the pretrained paper model
+
+`models/0518_42/` ships the paper's SCSN-trained model (refined SCSN dataset,
+seed 42, 80 epochs — the `configs/btpc_0518.yaml` run).
+`stage2_cluster_classifier.pth` is the prediction checkpoint (encoder + head
++ cluster centers); `stage1_final_pwave_model.pth` is the bare Stage 1
+encoder, kept for analysis. It reproduces the paper's validation numbers
+through this package (acc 0.9630 before rejection, accept rate 0.9528, acc
+0.9793 on accepted picks; see `docs/reproduction.md`).
+
+Use it to predict directly, without retraining — e.g. on a `phasenet`-layout
+file from step 2:
+
+```bash
+btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 --anchor-tta-noise-std 0
+```
+
+Caveat: this model was trained and validated on SCSN data; how well it
+transfers to another region without retraining was not part of the paper.
+The recommended workflow for a new region remains the self-training path
+above — the pretrained model is there for SCSN-style data, quick trials, and
+as a baseline to compare your retrained model against.
+
 ## Reproducing the paper
 
 With the real datasets in place (see [docs/data.md](docs/data.md)), the
