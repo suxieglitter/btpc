@@ -100,6 +100,22 @@ btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth 
 `--dataset-source unlabeled` is an alias of `ridgecrest_unlabeled`: both read
 the `phasenet` group produced by this script.
 
+## From predictions to focal mechanisms (SKHASH)
+
+The accepted polarities feed straight into SKHASH first-motion inversion via
+`scripts/export_skhash.py` — it applies the paper's MC/MCM rejection and
+writes the station/event/polarity files plus a control file; you supply your
+event catalog, station list and 1-D velocity model (formats and options in
+[skhash.md](skhash.md)):
+
+```bash
+python scripts/export_skhash.py \
+    --predictions runs/mine/stage2/predict_out/predictions_anchor_mapped.csv \
+    --data-path my_data.h5 --events events.csv --stations stations.csv \
+    --vmodel vel.txt --output-dir skhash_run
+SKHASH skhash_run/control_auto.txt   # mechanisms land in skhash_run/output/out.csv
+```
+
 ## Building the anchor bank
 
 `btpc-predict` needs a small anchor bank of labelled SCSN waveforms to map

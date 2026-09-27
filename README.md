@@ -122,6 +122,11 @@ btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth 
 `anchors/anchor_bank_scsn_50_1000.npz` ships with the repository; the paper's
 Ridgecrest application used this same SCSN bank across regions.
 
+The accepted polarities then feed SKHASH first-motion inversion:
+`scripts/export_skhash.py` applies the paper's MC/MCM rejection and writes the
+station/event/polarity files and control file (see
+[docs/skhash.md](docs/skhash.md)).
+
 ### Training on the unlabeled Ridgecrest waveforms
 
 The paper's Ridgecrest application self-trains on the unlabelled `phasenet`
