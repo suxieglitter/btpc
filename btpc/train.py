@@ -1766,6 +1766,13 @@ def main_stage1(args):
             **loader_kwargs,
         )
 
+    if len(dataset) < cfg["batch_size"]:
+        print(
+            f"Warning: dataset ({len(dataset)}) is smaller than batch_size "
+            f"({cfg['batch_size']}); clamping batch_size to {len(dataset)}."
+        )
+        cfg["batch_size"] = len(dataset)
+
     model = build_barlow_model(
         base_channels=cfg["base_cha"], projector_dims=cfg["projector_dims"]
     )
