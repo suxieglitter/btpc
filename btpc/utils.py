@@ -65,11 +65,40 @@ def save_json(path: str, payload: Dict):
     Path(checked_path(path)).write_text(text, encoding="utf-8")
 
 
+def _numpy_global_alias(module_path: str, name: str):
+    """Return a registration-only alias whose module/name match ``module_path``.
+
+    numpy 1.26 and 2.x pickle the same ``_reconstruct`` / ``scalar`` helpers
+    under different module paths (``numpy.core`` vs ``numpy._core``), while
+    ``add_safe_globals`` registers an object by its real ``__module__``. The
+    alias only widens the allowlist; unpickling still imports and calls the
+    real function behind the requested GLOBAL path.
+    """
+    try:
+        module = __import__(module_path, fromlist=[name])
+        fn = getattr(module, name)
+    except (ImportError, AttributeError):
+        return None
+    if getattr(fn, "__module__", None) == module_path:
+        return fn
+
+    # torch hands the registered object itself back to the unpickler, so the
+    # alias must delegate to the real helper; it only carries the other name.
+    import functools
+
+    alias = functools.partial(fn)
+    alias.__module__ = module_path
+    alias.__qualname__ = alias.__name__ = name
+    return alias
+
+
 def load_checkpoint(path, map_location=None):
     """Load a checkpoint with ``weights_only=True`` (no arbitrary pickle execution).
 
     Stage 2 bundles carry plain numpy arrays next to the tensors; numpy's
     dtype/array globals are registered as safe because they are data, not code.
+    Both numpy module spellings (``core`` / ``_core``) are allowlisted so a
+    checkpoint saved under numpy 1.x loads under numpy 2.x and vice versa.
     """
     safe_globals = [
         np.ndarray,
@@ -85,11 +114,11 @@ def load_checkpoint(path, map_location=None):
         np.complex64,
         np.complex128,
     ]
-    try:
-        from numpy._core.multiarray import _reconstruct, scalar as numpy_scalar
-    except ImportError:  # numpy 1.x layout
-        from numpy.core.multiarray import _reconstruct, scalar as numpy_scalar
-    safe_globals.extend([_reconstruct, numpy_scalar])
+    for module_path in ("numpy.core.multiarray", "numpy._core.multiarray"):
+        for helper in ("_reconstruct", "scalar"):
+            alias = _numpy_global_alias(module_path, helper)
+            if alias is not None:
+                safe_globals.append(alias)
     try:
         from numpy.dtypes import (
             BoolDType,
