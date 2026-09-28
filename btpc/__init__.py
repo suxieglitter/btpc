@@ -14,4 +14,11 @@ A two-stage, label-free pipeline for seismic P-wave polarity:
 Command line entry points: ``btpc-train``, ``btpc-valid``, ``btpc-predict``.
 """
 
+import os
+
+# All figures are written to PNG files, never shown interactively, so the
+# pipeline must run on headless machines (servers, CI, WSL without an X
+# server). Respect an explicit MPLBACKEND if the user set one.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 __version__ = "0.1.0"
