@@ -229,16 +229,18 @@ as a baseline to compare your retrained model against.
 
 ### Complete demo command sequence
 
-Everything above as one copy-paste block, measured on a 100-event Ridgecrest
-demo subset (2,222 picks, CI network, spanning the M6.4 and M7.1 mainshocks):
-waveform cutting 8 s, pretrained-model prediction 22 s, SKHASH 12 s — about
-45 s end to end on CPU. Put the four inputs in the working directory first
-(`picks.csv`, `events.csv`, `stations.csv`, `vel.txt`; formats in
-[docs/data.md](docs/data.md) and [docs/skhash.md](docs/skhash.md)).
+Everything above as one copy-paste block. The repository ships a ready-made
+real-data demo in `demo/ridgecrest100/` — 100 events from the 2019
+Ridgecrest sequence (2,222 picks, CI network, spanning the M6.4 and M7.1
+mainshocks) with SAC waveforms, the pick table, the event catalog, the
+station list and the velocity model. Measured on that directory: waveform
+cutting 8 s, pretrained-model prediction 22 s, SKHASH 12 s — about 45 s end
+to end on CPU.
 
 ```bash
 # 1) cut P-wave windows -> my_data.h5 (paper processing, P at index 1000)
-python scripts/make_pwave_dataset.py --picks picks.csv --output my_data.h5
+python scripts/make_pwave_dataset.py \
+    --picks demo/ridgecrest100/picks.csv --output my_data.h5
 
 # 2) predict with the shipped paper model (no training needed)
 btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
@@ -251,7 +253,9 @@ btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
 python scripts/export_skhash.py \
     --predictions demo_predict/predictions_anchor_mapped.csv \
     --data-path my_data.h5 \
-    --events events.csv --stations stations.csv --vmodel vel.txt \
+    --events demo/ridgecrest100/events.csv \
+    --stations demo/ridgecrest100/stations.csv \
+    --vmodel demo/ridgecrest100/vel.txt \
     --output-dir skhash_run
 
 # 4) invert -> skhash_run/output/out.csv (+ beachball figures)

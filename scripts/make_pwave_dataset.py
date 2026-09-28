@@ -81,13 +81,17 @@ def read_picks_csv(csv_path: str):
                 f"{PICKS_PATH_COLUMNS}) and a pick-time column (one of "
                 f"{PICKS_TIME_COLUMNS}); found columns: {fieldnames}"
             )
+        base_dir = Path(csv_path).resolve().parent
         for row in reader:
             path = (row[path_col] or "").strip()
             time_str = (row[time_col] or "").strip()
             if not path or not time_str:
                 continue
+            wave_path = Path(path)
+            if not wave_path.is_absolute():
+                wave_path = base_dir / wave_path   # relative paths resolve against the CSV's directory
             yield {
-                "waveform_path": path,
+                "waveform_path": str(wave_path),
                 "p_time": UTCDateTime(time_str),
                 "record_id": row.get("record_id") or None,
                 "event_id": row.get("event_id") or None,

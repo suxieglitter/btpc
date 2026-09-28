@@ -211,15 +211,16 @@ btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
 
 ### 完整演示命令（可整块照抄）
 
-在 100 个事件的 Ridgecrest 演示子集上实测（2,222 条拾取，CI 台网，
-横跨 M6.4 与 M7.1 两次主震）：截波形 8 秒、预训练模型预测 22 秒、
-SKHASH 12 秒——CPU 全程约 45 秒。先把四个输入放进工作目录
-（`picks.csv`、`events.csv`、`stations.csv`、`vel.txt`；格式见
-[docs/data.md](docs/data.md) 与 [docs/skhash.md](docs/skhash.md)）。
+仓库自带一套真实数据的演示输入 `demo/ridgecrest100/`——2019 年
+Ridgecrest 序列的 100 个事件（2,222 条拾取，CI 台网，横跨 M6.4 与
+M7.1 两次主震），SAC 波形、拾取表、事件目录、台站表和速度模型齐全。
+在该目录上实测：截波形 8 秒、预训练模型预测 22 秒、SKHASH 12 秒——
+CPU 全程约 45 秒。以下命令在仓库根目录照抄即可：
 
 ```bash
 # 1) 截 P 波窗口 -> my_data.h5（论文处理口径，P 在采样点 1000）
-python scripts/make_pwave_dataset.py --picks picks.csv --output my_data.h5
+python scripts/make_pwave_dataset.py \
+    --picks demo/ridgecrest100/picks.csv --output my_data.h5
 
 # 2) 用仓库自带论文模型预测（无需训练）
 btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
@@ -232,7 +233,9 @@ btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
 python scripts/export_skhash.py \
     --predictions demo_predict/predictions_anchor_mapped.csv \
     --data-path my_data.h5 \
-    --events events.csv --stations stations.csv --vmodel vel.txt \
+    --events demo/ridgecrest100/events.csv \
+    --stations demo/ridgecrest100/stations.csv \
+    --vmodel demo/ridgecrest100/vel.txt \
     --output-dir skhash_run
 
 # 4) 反演 -> skhash_run/output/out.csv（附 beachball 图）
