@@ -17,6 +17,8 @@ runs/
 *.pth
 !anchors/*.npz
 !models/**/*.pth
+demo_predict/
+skhash_run/
 
 # nested revision workspace has its own repo (suxieglitter/SRL_revision)
 SRL_revision/
