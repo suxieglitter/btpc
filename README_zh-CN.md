@@ -209,6 +209,52 @@ btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
 效果没有在论文里验证过。新研究区仍推荐上面的自训练路线——预训练模型
 的定位是 SCSN 式数据、快速试用，以及给自己重训的模型当对照基线。
 
+### 完整演示命令（可整块照抄）
+
+在 100 个事件的 Ridgecrest 演示子集上实测（2,222 条拾取，CI 台网，
+横跨 M6.4 与 M7.1 两次主震）：截波形 8 秒、预训练模型预测 22 秒、
+SKHASH 12 秒——CPU 全程约 45 秒。先把四个输入放进工作目录
+（`picks.csv`、`events.csv`、`stations.csv`、`vel.txt`；格式见
+[docs/data.md](docs/data.md) 与 [docs/skhash.md](docs/skhash.md)）。
+
+```bash
+# 1) 截 P 波窗口 -> my_data.h5（论文处理口径，P 在采样点 1000）
+python scripts/make_pwave_dataset.py --picks picks.csv --output my_data.h5
+
+# 2) 用仓库自带论文模型预测（无需训练）
+btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 \
+    --anchor-tta-noise-std 0 --save-dir demo_predict
+
+# 3) 导出 SKHASH 输入（默认论文拒收口径：mc<0.8 且 mcm<0.05）
+python scripts/export_skhash.py \
+    --predictions demo_predict/predictions_anchor_mapped.csv \
+    --data-path my_data.h5 \
+    --events events.csv --stations stations.csv --vmodel vel.txt \
+    --output-dir skhash_run
+
+# 4) 反演 -> skhash_run/output/out.csv（附 beachball 图）
+SKHASH skhash_run/control_auto.txt
+```
+
+要走自训练路线，把第 2 步换成：
+
+```bash
+btpc-train stage1 --dataset-source unlabeled --data-path my_data.h5 \
+    --num-used 0 --epochs 120 --n-tta-views 4 --eval-interval 0 \
+    --save-path runs/mine/stage1
+btpc-train stage2 --stage1-dir runs/mine/stage1
+btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 \
+    --anchor-tta-noise-std 0 --save-dir demo_predict
+```
+
+同一份 100 事件子集上，2,222 条 × 120 epochs 训练约 10 分钟（CPU）。
+
 ## 复现论文
 
 真实数据就位后（见 [docs/data.md](docs/data.md)），参考配置可以复现

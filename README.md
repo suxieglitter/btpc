@@ -227,6 +227,54 @@ The recommended workflow for a new region remains the self-training path
 above — the pretrained model is there for SCSN-style data, quick trials, and
 as a baseline to compare your retrained model against.
 
+### Complete demo command sequence
+
+Everything above as one copy-paste block, measured on a 100-event Ridgecrest
+demo subset (2,222 picks, CI network, spanning the M6.4 and M7.1 mainshocks):
+waveform cutting 8 s, pretrained-model prediction 22 s, SKHASH 12 s — about
+45 s end to end on CPU. Put the four inputs in the working directory first
+(`picks.csv`, `events.csv`, `stations.csv`, `vel.txt`; formats in
+[docs/data.md](docs/data.md) and [docs/skhash.md](docs/skhash.md)).
+
+```bash
+# 1) cut P-wave windows -> my_data.h5 (paper processing, P at index 1000)
+python scripts/make_pwave_dataset.py --picks picks.csv --output my_data.h5
+
+# 2) predict with the shipped paper model (no training needed)
+btpc-predict --stage2-checkpoint models/0518_42/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 \
+    --anchor-tta-noise-std 0 --save-dir demo_predict
+
+# 3) export SKHASH inputs (paper rejection: mc<0.8 AND mcm<0.05 by default)
+python scripts/export_skhash.py \
+    --predictions demo_predict/predictions_anchor_mapped.csv \
+    --data-path my_data.h5 \
+    --events events.csv --stations stations.csv --vmodel vel.txt \
+    --output-dir skhash_run
+
+# 4) invert -> skhash_run/output/out.csv (+ beachball figures)
+SKHASH skhash_run/control_auto.txt
+```
+
+To run the self-training route instead, replace step 2 with:
+
+```bash
+btpc-train stage1 --dataset-source unlabeled --data-path my_data.h5 \
+    --num-used 0 --epochs 120 --n-tta-views 4 --eval-interval 0 \
+    --save-path runs/mine/stage1
+btpc-train stage2 --stage1-dir runs/mine/stage1
+btpc-predict --stage2-checkpoint runs/mine/stage2/stage2_cluster_classifier.pth \
+    --target-source ridge --data-path my_data.h5 \
+    --anchor-bank-path anchors/anchor_bank_scsn_50_1000.npz \
+    --n-tta-views 30 --tta-max-shift 1 --tta-noise-std 0.01 \
+    --anchor-tta-noise-std 0 --save-dir demo_predict
+```
+
+On the same 100-event subset, 2,222 records × 120 epochs train in about
+10 minutes on CPU.
+
 ## Reproducing the paper
 
 With the real datasets in place (see [docs/data.md](docs/data.md)), the
